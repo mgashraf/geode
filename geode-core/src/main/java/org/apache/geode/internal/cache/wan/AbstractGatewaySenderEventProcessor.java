@@ -509,27 +509,38 @@ public abstract class AbstractGatewaySenderEventProcessor extends Thread {
           }
 
           // Filter the events
-          for (GatewayEventFilter filter : sender.getGatewayEventFilters()) {
-            Iterator<GatewaySenderEventImpl> itr = filteredList.iterator();
-            while (itr.hasNext()) {
-              GatewayQueueEvent event = itr.next();
+          Iterator<GatewaySenderEventImpl> itr = filteredList.iterator();
+          while (itr.hasNext()) {
+            GatewayQueueEvent event = itr.next();
 
-              // This seems right place to prevent transmission of UPDATE_VERSION events if
-              // receiver's
-              // version is < 7.0.1, especially to prevent another loop over events.
-              if (!sendUpdateVersionEvents
-                  && event.getOperation() == Operation.UPDATE_VERSION_STAMP) {
-                if (isTraceEnabled) {
-                  logger.trace(
-                      "Update Event Version event: {} removed from Gateway Sender queue: {}", event,
-                      sender);
-                }
-
-                itr.remove();
-                statistics.incEventsNotQueued();
-                continue;
+            // This seems right place to prevent transmission of UPDATE_VERSION events if
+            // receiver's
+            // version is < 7.0.1, especially to prevent another loop over events.
+            if (!sendUpdateVersionEvents
+                && event.getOperation() == Operation.UPDATE_VERSION_STAMP) {
+              if (isDebugEnabled) {
+                logger.debug("Update Event Version event: {} removed from Gateway Sender queue: {}",
+                    event, sender);
               }
 
+              itr.remove();
+              statistics.incEventsNotQueued();
+              continue;
+            }
+
+            if (((GatewaySenderEventImpl) event).isConcurrencyConflict()) {
+              if (isDebugEnabled) {
+                logger.debug(
+                    "Event with concurrent modification conflict: {} will be removed from Gateway Sender queue: {}",
+                    event, sender);
+              }
+
+              itr.remove();
+              statistics.incEventsNotQueued();
+              continue;
+            }
+
+            for (GatewayEventFilter filter : sender.getGatewayEventFilters()) {
               boolean transmit = filter.beforeTransmit(event);
               if (!transmit) {
                 if (isDebugEnabled) {
@@ -550,8 +561,8 @@ public abstract class AbstractGatewaySenderEventProcessor extends Thread {
           // AsyncEventQueue since possibleDuplicate flag is not used in WAN.
           if (this.getSender().isParallel()
               && (this.getDispatcher() instanceof GatewaySenderEventCallbackDispatcher)) {
-            Iterator<GatewaySenderEventImpl> itr = filteredList.iterator();
-            while (itr.hasNext()) {
+            Iterator<GatewaySenderEventImpl> eventItr = filteredList.iterator();
+            while (eventItr.hasNext()) {
               GatewaySenderEventImpl event = (GatewaySenderEventImpl) itr.next();
               PartitionedRegion qpr = null;
               if (this.getQueue() instanceof ConcurrentParallelGatewaySenderQueue) {
